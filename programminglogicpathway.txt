@@ -1,0 +1,42 @@
+Start:
+
+Choose a Setting: Computer asks for a setting, person inputs either a “p” or an “s” 
+Options: jumping/plyometrics (denoted with “p”), squatting with load (denoted with “s”)
+If Jumping/Plyometrics:
+Begin Jumping Calibration
+If Squatting with Load:
+Begin Squatting Calibration
+
+Jumping Calibration:
+Ask user if they’re ready to begin calibration and are standing with knees bent around 90 degrees
+When they reply with “y”, analogRead all 6 FSRs via Bluetooth. Save the variables so they can be used in another instance. Use the knee sensor to analogread all flex sensors and store all 5 variables.
+Ask user to jump, keeping FSR readings on.
+The Analogread FSRS should detect when the person jumped by seeing a significant decrease in pressure values (something less than standing pressure - 30, or something like that).
+When the user lands, read the immediate increase in FSR values and capture those 6 values to be used in another instance.
+Initiate Jumping Simulation after waiting 2 seconds
+
+Jumping Simulation:
+Ask user if they’re ready to begin jumping simulation.
+When they reply with “y”, begin a loop function
+Loop Function (bluetooth connected foot circuit):
+Whenever FSR values are really low, jump is detected (print out “Jump detected” on serial monitor)
+When FSR readings spike, read the first 6 FSR values from the spike and store them in 6 variables. Print “land detected”
+Look if the back 2 FSR values are greater than the others (or if one in the back is greater — or statement?).
+If this occurs, say “land on back heel detected”
+When the FSR readings spiked, also record the x-axis angle velocity. If it caves in and reaches a sharp negative value (maybe like 15-20 theta/sec), say “Internal Rotation Detected”
+When the FSR readings spiked, begin to check the flex sensor readings from the master circuit. If 3 or more exceed 10+ the original calibration flexion, say “excessive flexion detected”
+Once the flex sensor readings of at least 3 of them are less than  the calibration reading - 10, ask the user if they’re ready to complete another jump. Check the flex sensors last in the checking sequence.
+When they reply with “y”, initiate the loop again.
+
+Squatting Calibration:
+Ask user to bend their knees at 90 degrees.
+When they reply with “y”, collect the 5 flex sensor values and store them
+Begin Squatting Simulation
+
+Squatting Simulation:
+Initiate a loop
+Say that the user can begin squatting
+On a squat, if at least 3 flex sensors read something greater than their specific previous calibration readings, say “over 90 degrees detected.”
+Create a counter that counts the number of times the sensors detect 90 degrees, and print the status after another detection
+On the same squat, go to the bluetooth-connected IMU and x-axis angle velocity read. If it ever reaches a sharp negative value (15-20 theta/sec) say “internal rotation detected”
+Create a counter that counts the number of times the IMU detects internal rotation, and print the status after another detection
