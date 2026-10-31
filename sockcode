@@ -1,0 +1,185 @@
+#include <BLEDevice.h>
+#include <BLEClient.h>
+#include <BLEUtils.h>
+#include <BLEScan.h>
+#include <Wire.h>
+#include <Adafruit_LSM6DSOX.h>
+
+
+//BLE UUIDs initialization
+#define SERVICE_UUID        "12345678-1234-1234-1234-123456789012"
+#define CHARACTERISTIC_UUID_TX "12345678-1234-1234-1234-123456789013"  //master to client
+#define CHARACTERISTIC_UUID_RX "12345678-1234-1234-1234-123456789014"  //client to master
+
+
+//BLE objects, section acquired from Google after failures
+BLEClient*          client   = nullptr;
+BLERemoteCharacteristic* Tx= nullptr;  //client reads
+BLERemoteCharacteristic* Rx = nullptr;  //client writes data
+bool connect    = false;
+bool requestread = false;
+
+
+//IMU initialization
+Adafruit_LSM6DSOX imu;
+
+
+//FSR pins on Arduino
+const int fsrpins[6] = {36, 39, 34, 35, 32, 33};
+
+
+//readFSRs: runs analogRead to find forces on force-sensitive resistors (2 in front of the foot, two in the middle of the foot, and two in the back)
+void readFSRs(int out[6]) {
+  for (int i = 0; i < 6; i++) out[i] = analogRead(fsrpins[i]);
+}
+
+
+//notifyCallback (gathered from Google after failures with data processing)
+void notifyCallback(BLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+  String msg = "";
+  for (int i = 0; i < length; i++) msg += (char)pData[i];
+  msg.trim();
+  if (msg == "READ") requestread = true;
+}
+
+
+//connecting the ankle (client) circuit to the knee (master) circuit
+bool connectingtomaster() {
+  Serial.println("Scanning…");
+  BLEScan* scan = BLEDevice::getScan();
+  scan->setActiveScan(true);
+  BLEScanResults results = scan->start(5, false); //start scan and scan for five seconds before returning data
+
+
+  BLEAdvertisedDevice* target = nullptr;
+  for (int i = 0; i < results.getCount(); i++) {
+    BLEAdvertisedDevice device = results.getDevice(i);
+    if (device.getName() == "Knee") {		//finds BLE devices named “Knee” and saves it
+      target = new BLEAdvertisedDevice(device);
+      break;
+    }
+  }
+  scan->clearResults();				//clears results
+//conditionals for troubleshooting finding the knee circuit
+  if (!target) {
+    Serial.println("Knee not found.");
+    return false;
+  }
+//connecting to Knee if found, making the ankle circuit the client.
+  Serial.println("Found Knee, connecting.");
+  client = BLEDevice::createClient();
+  if (!client->connect(target)) {
+    Serial.println("Connection failed.");
+    delete target;
+    return false;
+  }
+  delete target; //deletes copy
+
+
+  //getting service
+  BLERemoteService* service = client->getService(SERVICE_UUID);
+  if (!service) {
+    Serial.println("Service is not found.");
+    client->disconnect();
+    return false;
+  }
+
+
+  //searching for transmit characteristic by UUID (Google helped troubleshoot this step)
+  Tx = service->getCharacteristic(CHARACTERISTIC_UUID_TX);
+  if (!Tx) {
+    Serial.println("TX not found.");
+    client->disconnect(); //checks if Tx exists on Knee, disconnects if it can’t transmit information
+    return false;
+  }
+  if (Tx->canNotify()) {
+    Tx->registerForNotify(notifyCallback);
+  }
+
+
+  //searching for reception characteristic by UUID (Google helped troubleshoot this step)
+  Rx = service->getCharacteristic(CHARACTERISTIC_UUID_RX);
+  if (!Rx) {
+    Serial.println("RX not found."); //checks if Rx exists on Knee, disconnects if it can’t receive information
+    client->disconnect();
+    return false;
+  }
+
+
+  Serial.println("Connected, fully");
+  return true;
+}
+
+
+//setup function
+void setup() {
+  Serial.begin(115200);
+
+
+  //initializing Adafruit_LSM6DSOX 
+  Wire.begin(21, 22); //specifies ESP32 microcontroller pins
+  if (!imu.begin_I2C()) {
+    Serial.println("IMU not found."); //added by Google for IMU troubleshooting
+    while (true) delay(100);
+  }
+  imu.setGyroRange(LSM6DS_GYRO_RANGE_250_DPS);//sets angular velocities and gyroscopic output data rate using libraries
+  imu.setGyroDataRate(LSM6DS_RATE_104_HZ);
+  Serial.println("IMU is set up.");
+
+
+  //intializes BLE connection
+  BLEDevice::init("Sock");
+
+
+  //tries to connect until it gets the signal.
+  while (!connect) {
+    connect = connectingtomaster();
+    if (!connect) {
+      Serial.println("Retrying.”);
+      delay(2000);
+    }
+  }
+}
+
+
+//loop function for readings
+void loop() {
+  if (!client || !client->isConnected()) { //checks connection
+    connect = false;
+    Serial.println("It disconnected; trying again.");
+    while (!connect) {
+      connect = connectingtomaster(); //tries connecting again
+      if (!connect) delay(2000);
+    }
+  }
+
+
+  //responding to Knee (master) requests for reading
+  if (requestread) {
+    requestread = false;
+    //reading FSRs
+    int fsr[6];
+    readFSRs(fsr);
+
+
+    //reading IMU, x-direction (internal/external rotation accelerations) - help from IMU library
+    sensors_event_t accel, gyro, temp;
+    imu.getEvent(&accel, &gyro, &temp);
+    float imuangle = abs(gyro.gyro.y * RAD_TO_DEG);
+
+
+    //build string for sending to the Knee circuit
+    String response = "Bottom of Foot:";
+    for (int i = 0; i < 6; i++) {
+      response += String(fsr[i]);
+      if (i < 5) response += ",";
+    }
+    response += ";IMU:";
+    response += String(imuangle, 2);
+    //sending string to master (Knee), with help from Google to write the line
+    Rx->writeValue(response.c_str(), response.length());
+  }
+
+
+  delay(10);
+}
